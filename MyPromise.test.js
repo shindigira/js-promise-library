@@ -1,11 +1,11 @@
 const MyPromise = require("./MyPromise.js")
 // const MyPromise = Promise
 
-const DEFAULT_VALUE = "default"
+const DEFAULT_VALUE = "default";
 
 describe("then", () => {
   it("with no chaining", () => {
-    return promise().then(v => expect(v).toEqual(DEFAULT_VALUE))
+    return promise().then(v => {console.log('ran'); return expect(v).toEqual(DEFAULT_VALUE)})
   })
 
   it("with multiple thens for same promise", () => {

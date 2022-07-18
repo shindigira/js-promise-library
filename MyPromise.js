@@ -1,212 +1,132 @@
-const STATE = {
-  FULFILLED: "fulfilled",
+// https://www.youtube.com/watch?v=1l4wHWQCCIc&t=954s&ab_channel=WebDevSimplified
+// https://github.com/WebDevSimplified/js-promise-library/
+// https://medium.com/nerd-for-tech/implement-your-own-promises-in-javascript-68ddaa6a5409
+const promiseStates = {
   REJECTED: "rejected",
-  PENDING: "pending",
+  FULFILLED: "fullfilled",
+  PENDING: "pending"
 }
 
 class MyPromise {
-  #thenCbs = []
-  #catchCbs = []
-  #state = STATE.PENDING
-  #value
-  #onSuccessBind = this.#onSuccess.bind(this)
-  #onFailBind = this.#onFail.bind(this)
 
-  constructor(cb) {
+  constructor(callback) {
+    this.thenHandlers = [];
+    this.catchHandlers = [];
+    this.state = promiseStates.PENDING;
+    this.value;
+
     try {
-      cb(this.#onSuccessBind, this.#onFailBind)
+      callback(this._resolve, this._reject);
     } catch (e) {
-      this.#onFail(e)
+      this._reject(e);
     }
   }
 
-  #runCallbacks() {
-    if (this.#state === STATE.FULFILLED) {
-      this.#thenCbs.forEach(callback => {
-        callback(this.#value)
-      })
+  _resolve = value => {
+    this.#updateState(value, promiseStates.FULFILLED);
+  }
 
-      this.#thenCbs = []
+  _reject = value => {
+    this.#updateState(value, promiseStates.REJECTED);
+  }
+
+  #updateState = (value, state) => {
+    // actually put on event loop job queue
+    // for testing, can just use setTimeout, 0
+    queueMicrotask(()=>{
+      
+      if (this.state === promiseStates.PENDING) {
+      // Prevents 'resolve' or 'reject' again (e.g. using resolve in a promise multiple times) or .then again on fulfilled/rejected promise
+
+      if(value instanceof MyPromise) {
+        value.then(this._resolve, this._reject);
+        return;
+      }
+        
+      this.state = state;
+      this.value = value;
+      this.#runHandlers();
+    }
+      
+    });
+
+  }
+
+  #runHandlers = () => {
+    
+    if (this.state === promiseStates.PENDING) return;
+    const handlers = this.state === promiseStates.FULFILLED ? this.thenHandlers : this.catchHandlers;
+    for (const handler of handlers) {
+      handler(this.value);
     }
 
-    if (this.#state === STATE.REJECTED) {
-      this.#catchCbs.forEach(callback => {
-        callback(this.#value)
-      })
-
-      this.#catchCbs = []
-    }
+    this.#clearHandlers();
   }
 
-  #onSuccess(value) {
-    queueMicrotask(() => {
-      if (this.#state !== STATE.PENDING) return
-
-      if (value instanceof MyPromise) {
-        value.then(this.#onSuccessBind, this.#onFailBind)
-        return
-      }
-
-      this.#value = value
-      this.#state = STATE.FULFILLED
-      this.#runCallbacks()
-    })
+  #clearHandlers = () => {
+    this.thenHandlers = [];
+    this.catchHandlers = [];
   }
 
-  #onFail(value) {
-    queueMicrotask(() => {
-      if (this.#state !== STATE.PENDING) return
+  then = (thenCB, catchCB) => {
+    return new MyPromise( (resolve, reject) => {
+      // Push callback for thenable - success
+      this.thenHandlers.push(value => {
+        // value will be the this.value from the parent Promise
+        if(typeof(thenCB) !== 'function') {
+          // no callback -- just resolve
+          // if thenCb is a char, bool, number, null or undefined - just resolve it in the promise created by the thenable
+          resolve(value);
+          return;
+        }
 
-      if (value instanceof MyPromise) {
-        value.then(this.#onSuccessBind, this.#onFailBind)
-        return
-      }
+        // thenCB is a 'function' callback
+        try {
+          resolve(thenCB(value));
+        } catch (e) {
+          reject(e);
+        }
+        
+      });
 
-      if (this.#catchCbs.length === 0) {
-        throw new UncaughtPromiseError(value)
-      }
-
-      this.#value = value
-      this.#state = STATE.REJECTED
-      this.#runCallbacks()
-    })
-  }
-
-  then(thenCb, catchCb) {
-    return new MyPromise((resolve, reject) => {
-      this.#thenCbs.push(result => {
-        if (thenCb == null) {
-          resolve(result)
-          return
+      // Push callback for thenable - success
+      this.catchHandlers.push(value => {
+        // value (error or value) will be the this.value from the parent Promise
+        if(typeof(catchCB) !== 'function') {
+          // no callback -- just resolve
+          // if catchCB is a char, bool, number, null or undefined - just resolve it in the promise created by the thenable
+          reject(value);
+          return;
         }
 
         try {
-          resolve(thenCb(result))
-        } catch (error) {
-          reject(error)
+          // this is really a reject in the parent Promise
+          // see this._reject
+          // allows for **promise recovery**
+          resolve(catchCB(value)); 
+        } catch (e) {
+          reject(e);
         }
-      })
+        
+      });
+      if(typeof(catchCB) === 'function') this.catchHandlers.push(catchCB);
 
-      this.#catchCbs.push(result => {
-        if (catchCb == null) {
-          reject(result)
-          return
-        }
-
-        try {
-          resolve(catchCb(result))
-        } catch (error) {
-          reject(error)
-        }
-      })
-
-      this.#runCallbacks()
-    })
+      // run handlers before the next thennable pushes callbacks
+      this.#runHandlers();
+    });
+  }
+  
+  catch = (cb) => {
+    return this.then(null, cb);
   }
 
-  catch(cb) {
-    return this.then(undefined, cb)
+  finally = (cb) => {
+    cb();
+    // this continues either to the next thenable or next catch
+    return this.then(value => value, value => {throw value;});
   }
 
-  finally(cb) {
-    return this.then(
-      result => {
-        cb()
-        return result
-      },
-      result => {
-        cb()
-        throw result
-      }
-    )
-  }
-
-  static resolve(value) {
-    return new Promise(resolve => {
-      resolve(value)
-    })
-  }
-
-  static reject(value) {
-    return new Promise((resolve, reject) => {
-      reject(value)
-    })
-  }
-
-  static all(promises) {
-    const results = []
-    let completedPromises = 0
-    return new MyPromise((resolve, reject) => {
-      for (let i = 0; i < promises.length; i++) {
-        const promise = promises[i]
-        promise
-          .then(value => {
-            completedPromises++
-            results[i] = value
-            if (completedPromises === promises.length) {
-              resolve(results)
-            }
-          })
-          .catch(reject)
-      }
-    })
-  }
-
-  static allSettled(promises) {
-    const results = []
-    let completedPromises = 0
-    return new MyPromise(resolve => {
-      for (let i = 0; i < promises.length; i++) {
-        const promise = promises[i]
-        promise
-          .then(value => {
-            results[i] = { status: STATE.FULFILLED, value }
-          })
-          .catch(reason => {
-            results[i] = { status: STATE.REJECTED, reason }
-          })
-          .finally(() => {
-            completedPromises++
-            if (completedPromises === promises.length) {
-              resolve(results)
-            }
-          })
-      }
-    })
-  }
-
-  static race(promises) {
-    return new MyPromise((resolve, reject) => {
-      promises.forEach(promise => {
-        promise.then(resolve).catch(reject)
-      })
-    })
-  }
-
-  static any(promises) {
-    const errors = []
-    let rejectedPromises = 0
-    return new MyPromise((resolve, reject) => {
-      for (let i = 0; i < promises.length; i++) {
-        const promise = promises[i]
-        promise.then(resolve).catch(value => {
-          rejectedPromises++
-          errors[i] = value
-          if (rejectedPromises === promises.length) {
-            reject(new AggregateError(errors, "All promises were rejected"))
-          }
-        })
-      }
-    })
-  }
 }
 
-class UncaughtPromiseError extends Error {
-  constructor(error) {
-    super(error)
 
-    this.stack = `(in promise) ${error.stack}`
-  }
-}
-
-module.exports = MyPromise
+module.exports = MyPromise;
